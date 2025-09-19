@@ -1,188 +1,75 @@
-import 'package:camera/camera.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:google_mlkit_object_detection/google_mlkit_object_detection.dart';
+import 'package:camera/camera.dart';
 
-void main() {
-  testWidgets('App builds with fake camera', (WidgetTester tester) async {
-    // Create a fake CameraDescription (no real hardware needed)
-    const fakeCamera = CameraDescription(
-      name: 'FakeCamera',
-      lensDirection: CameraLensDirection.back,
-      sensorOrientation: 0,
-    );
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
 
-    // Build the app with the fake camera
-    await tester.pumpWidget(MyApp(camera: fakeCamera));
+  // Get the list of available cameras
+  final cameras = await availableCameras();
+  final firstCamera = cameras.first;
 
-    // Verify MyApp is in the widget tree
-    expect(find.byType(MyApp), findsOneWidget);
-  });
+  // Run the app with the first available camera
+  runApp(MyApp(camera: firstCamera));
 }
 
 class MyApp extends StatelessWidget {
   final CameraDescription camera;
+
   const MyApp({super.key, required this.camera});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter AR Object Detection',
-      debugShowCheckedModeBanner: false,
-      home: ObjectDetectionPage(camera: camera),
+      title: 'Flutter Camera Demo',
+      theme: ThemeData(primarySwatch: Colors.blue),
+      home: CameraPreviewScreen(camera: camera),
     );
   }
 }
 
-class ObjectDetectionPage extends StatefulWidget {
+class CameraPreviewScreen extends StatefulWidget {
   final CameraDescription camera;
-  const ObjectDetectionPage({super.key, required this.camera});
+
+  const CameraPreviewScreen({super.key, required this.camera});
 
   @override
-  State<ObjectDetectionPage> createState() => _ObjectDetectionPageState();
+  State<CameraPreviewScreen> createState() => _CameraPreviewScreenState();
 }
 
-class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
-  late CameraController _cameraController;
-  late ObjectDetector _objectDetector;
-  bool _isBusy = false;
-  List<DetectedObject> _detectedObjects = [];
+class _CameraPreviewScreenState extends State<CameraPreviewScreen> {
+  late CameraController _controller;
+  late Future<void> _initializeControllerFuture;
 
   @override
   void initState() {
     super.initState();
-    _initializeCamera();
-    _objectDetector = ObjectDetector(
-      options: ObjectDetectorOptions(
-        mode: DetectionMode.stream,
-        classifyObjects: true,
-        multipleObjects: true,
-      ),
-    );
-  }
-
-  void _initializeCamera() async {
-    _cameraController = CameraController(
+    _controller = CameraController(
       widget.camera,
       ResolutionPreset.medium,
-      enableAudio: false,
     );
-    await _cameraController.initialize();
-
-    _cameraController.startImageStream((CameraImage cameraImage) async {
-      if (_isBusy) return;
-      _isBusy = true;
-
-      try {
-        final WriteBuffer allBytes = WriteBuffer();
-        for (final plane in cameraImage.planes) {
-          allBytes.putUint8List(plane.bytes);
-        }
-
-        final plane = cameraImage.planes[0]; // use first plane
-        final inputImage = InputImage.fromBytes(
-          bytes: plane.bytes,
-          metadata: InputImageMetadata(
-            size: Size(
-              cameraImage.width.toDouble(),
-              cameraImage.height.toDouble(),
-            ),
-            rotation: InputImageRotation.rotation0deg,
-            format: InputImageFormat.yuv420,
-            bytesPerRow: plane.bytesPerRow,
-          ),
-        );
-
-        final objects = await _objectDetector.processImage(inputImage);
-        if (mounted) setState(() => _detectedObjects = objects);
-      } catch (e) {
-        debugPrint("Error: $e");
-      } finally {
-        _isBusy = false;
-      }
-    });
-
-    setState(() {});
+    _initializeControllerFuture = _controller.initialize();
   }
 
   @override
   void dispose() {
-    _cameraController.dispose();
-    _objectDetector.close();
+    _controller.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (!_cameraController.value.isInitialized) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
-    }
-
     return Scaffold(
-      body: Stack(
-        children: [
-          CameraPreview(_cameraController),
-          CustomPaint(
-            painter: ObjectPainter(
-              objects: _detectedObjects,
-              imageSize: Size(
-                _cameraController.value.previewSize!.height,
-                _cameraController.value.previewSize!.width,
-              ),
-            ),
-          ),
-        ],
+      appBar: AppBar(title: const Text('Camera Preview')),
+      body: FutureBuilder<void>(
+        future: _initializeControllerFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.done) {
+            return CameraPreview(_controller);
+          } else {
+            return const Center(child: CircularProgressIndicator());
+          }
+        },
       ),
     );
   }
-}
-
-class ObjectPainter extends CustomPainter {
-  final List<DetectedObject> objects;
-  final Size imageSize;
-
-  ObjectPainter({required this.objects, required this.imageSize});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = Colors.red
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3;
-
-    final scaleX = size.width / imageSize.width;
-    final scaleY = size.height / imageSize.height;
-
-    for (final obj in objects) {
-      final rect = Rect.fromLTRB(
-        obj.boundingBox.left * scaleX,
-        obj.boundingBox.top * scaleY,
-        obj.boundingBox.right * scaleX,
-        obj.boundingBox.bottom * scaleY,
-      );
-      canvas.drawRect(rect, paint);
-
-      for (final label in obj.labels) {
-        final textPainter = TextPainter(
-          text: TextSpan(
-            text:
-                '${label.text} ${(label.confidence * 100).toStringAsFixed(0)}%',
-            style: const TextStyle(
-              color: Colors.red,
-              fontSize: 14,
-              backgroundColor: Colors.black54,
-            ),
-          ),
-          textDirection: TextDirection.ltr,
-        );
-        textPainter.layout();
-        textPainter.paint(canvas, Offset(rect.left, rect.top - 20));
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant ObjectPainter oldDelegate) => true;
 }
