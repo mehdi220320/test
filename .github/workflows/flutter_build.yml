@@ -3,7 +3,7 @@ name: Flutter Build APK
 on:
   push:
     branches:
-      - main   # déclenche le build sur chaque push dans la branche main
+      - main   # déclenche sur chaque push sur main
   pull_request:
 
 jobs:
@@ -11,38 +11,38 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Récupération du code
+      # 1️⃣ Récupérer le code source
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Installation de Flutter
+      # 2️⃣ Installer Flutter (version compatible avec Dart >= 3.8.0)
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.0' # adapte à ta version
+          flutter-version: '3.35.4'
           channel: 'stable'
 
-      # Vérification de la version
+      # 3️⃣ Vérifier la version
       - name: Flutter version
         run: flutter --version
 
-      # Téléchargement des dépendances
+      # 4️⃣ Installer les dépendances
       - name: Install dependencies
         run: flutter pub get
 
-      # Analyse (optionnel)
+      # 5️⃣ (Optionnel) Analyse statique
       - name: Analyze project
         run: flutter analyze
 
-      # Exécuter les tests (optionnel, tu peux enlever si pas de tests)
+      # 6️⃣ (Optionnel) Lancer les tests unitaires
       - name: Run tests
         run: flutter test
 
-      # Construire l’APK en mode release
+      # 7️⃣ Construire l’APK en mode release
       - name: Build APK
         run: flutter build apk --release
 
-      # Sauvegarder l’APK en artefacts téléchargeables
+      # 8️⃣ Sauvegarder l’APK comme artefact téléchargeable
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
