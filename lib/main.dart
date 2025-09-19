@@ -1,4 +1,3 @@
-import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -64,29 +63,29 @@ class _ObjectDetectionPageState extends State<ObjectDetectionPage> {
       _isBusy = true;
 
       try {
-        // Convert YUV420 image to bytes
         final WriteBuffer allBytes = WriteBuffer();
         for (final plane in cameraImage.planes) {
           allBytes.putUint8List(plane.bytes);
         }
-        final bytes = allBytes.done().buffer.asUint8List();
 
-        final plane = cameraImage.planes[0]; // take the first plane
+        final plane = cameraImage.planes[0]; // use first plane
         final inputImage = InputImage.fromBytes(
           bytes: plane.bytes,
           metadata: InputImageMetadata(
-            size: Size(cameraImage.width.toDouble(), cameraImage.height.toDouble()),
+            size: Size(
+              cameraImage.width.toDouble(),
+              cameraImage.height.toDouble(),
+            ),
             rotation: InputImageRotation.rotation0deg,
             format: InputImageFormat.yuv420,
             bytesPerRow: plane.bytesPerRow,
           ),
         );
 
-
         final objects = await _objectDetector.processImage(inputImage);
         if (mounted) setState(() => _detectedObjects = objects);
       } catch (e) {
-        print("Error: $e");
+        debugPrint("Error: $e");
       } finally {
         _isBusy = false;
       }
@@ -157,7 +156,8 @@ class ObjectPainter extends CustomPainter {
       for (final label in obj.labels) {
         final textPainter = TextPainter(
           text: TextSpan(
-            text: '${label.text} ${(label.confidence * 100).toStringAsFixed(0)}%',
+            text:
+                '${label.text} ${(label.confidence * 100).toStringAsFixed(0)}%',
             style: const TextStyle(
               color: Colors.red,
               fontSize: 14,
