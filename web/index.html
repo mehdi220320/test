@@ -1,0 +1,19 @@
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js"></script>
+
+<script>
+    let model;
+    async function loadModel() {
+        model = await cocoSsd.load();
+        console.log("COCO-SSD model loaded");
+    }
+    loadModel();
+
+    async function detectObjects(videoElement) {
+        if (!model) return [];
+        const predictions = await model.detect(videoElement);
+        return predictions;
+    }
+
+    window.detectObjects = detectObjects;
+</script>
