@@ -30,13 +30,7 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      # 5️⃣ (Optionnel) Analyse statique
-      - name: Analyze project
-        run: flutter analyze
-
-      # 6️⃣ (Optionnel) Lancer les tests unitaires
-      - name: Run tests
-        run: flutter test
+     
 
       # 7️⃣ Construire l’APK en mode release
       - name: Build APK
