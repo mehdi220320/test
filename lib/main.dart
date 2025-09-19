@@ -3,10 +3,21 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_object_detection/google_mlkit_object_detection.dart';
 
-Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  final cameras = await availableCameras();
-  runApp(MyApp(camera: cameras.first));
+void main() {
+  testWidgets('App builds with fake camera', (WidgetTester tester) async {
+    // Create a fake CameraDescription (no real hardware needed)
+    const fakeCamera = CameraDescription(
+      name: 'FakeCamera',
+      lensDirection: CameraLensDirection.back,
+      sensorOrientation: 0,
+    );
+
+    // Build the app with the fake camera
+    await tester.pumpWidget(MyApp(camera: fakeCamera));
+
+    // Verify MyApp is in the widget tree
+    expect(find.byType(MyApp), findsOneWidget);
+  });
 }
 
 class MyApp extends StatelessWidget {
