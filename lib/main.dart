@@ -3,14 +3,21 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
-import 'package:tflite/tflite.dart';
+import 'package:tflite_flutter/tflite_flutter.dart';
+import 'package:google_mlkit_object_detection/google_mlkit_object_detection.dart';
 import 'package:vector_math/vector_math_64.dart';
-import 'package:arcore_flutter_plugin/arcore_flutter_plugin.dart';
-import 'package:image/image.dart' as img;
+import 'package:ar_flutter_plugin/ar_flutter_plugin.dart';
+import 'package:ar_flutter_plugin/datatypes/config_planedetection.dart';
+import 'package:ar_flutter_plugin/datatypes/node_types.dart';
+import 'package:ar_flutter_plugin/models/ar_node.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
+  
+  // Request camera permission
+  await Permission.camera.request();
+  
   // Get the list of available cameras
   final cameras = await availableCameras();
   final firstCamera = cameras.firstWhere(
@@ -18,7 +25,6 @@ Future<void> main() async {
     orElse: () => cameras.first,
   );
 
-  // Run the app with the first available camera
   runApp(MyApp(camera: firstCamera));
 }
 
@@ -49,13 +55,14 @@ class CameraPreviewScreen extends StatefulWidget {
 class _CameraPreviewScreenState extends State<CameraPreviewScreen> {
   late CameraController _controller;
   late Future<void> _initializeControllerFuture;
-  List<dynamic> _recognitions = [];
+  List<DetectedObject> _detectedObjects = [];
   bool _isDetecting = false;
   bool _isArViewActive = false;
-  ArCoreController? _arCoreController;
-  String? _detectedObject;
+  String? _selectedObject;
+  Interpreter? _interpreter;
+  final _objectDetector = ObjectDetector(options: ObjectDetectorOptions());
 
-  // COCO dataset labels (simplified)
+  // COCO dataset labels
   static const List<String> labels = [
     'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train',
     'truck', 'boat', 'traffic light', 'fire hydrant', 'stop sign',
@@ -75,6 +82,11 @@ class _CameraPreviewScreenState extends State<CameraPreviewScreen> {
   @override
   void initState() {
     super.initState();
+    _initializeCamera();
+    _loadModel();
+  }
+
+  Future<void> _initializeCamera() async {
     _controller = CameraController(
       widget.camera,
       ResolutionPreset.medium,
@@ -82,17 +94,16 @@ class _CameraPreviewScreenState extends State<CameraPreviewScreen> {
     );
     
     _initializeControllerFuture = _controller.initialize().then((_) {
-      loadModel();
-      startDetection();
+      if (mounted) {
+        startDetection();
+      }
     });
   }
 
-  Future<void> loadModel() async {
+  Future<void> _loadModel() async {
     try {
-      await Tflite.loadModel(
-        model: "assets/ssd_mobilenet.tflite",
-        labels: "assets/ssd_mobilenet.txt",
-      );
+      // Load TFLite model
+      _interpreter = await Interpreter.fromAsset('assets/models/ssd_mobilenet.tflite');
     } catch (e) {
       print('Error loading model: $e');
     }
@@ -103,92 +114,73 @@ class _CameraPreviewScreenState extends State<CameraPreviewScreen> {
       if (_isDetecting) return;
       _isDetecting = true;
       
-      detectObjects(image).then((recognitions) {
-        setState(() {
-          _recognitions = recognitions;
-        });
+      detectObjects(image).then((objects) {
+        if (mounted) {
+          setState(() {
+            _detectedObjects = objects;
+          });
+        }
         _isDetecting = false;
       });
     });
   }
 
-  Future<List<dynamic>> detectObjects(CameraImage image) async {
+  Future<List<DetectedObject>> detectObjects(CameraImage image) async {
     try {
-      var recognitions = await Tflite.detectObjectOnFrame(
-        bytesList: image.planes.map((plane) {
-          return plane.bytes;
-        }).toList(),
-        imageHeight: image.height,
-        imageWidth: image.width,
-        imageMean: 127.5,
-        imageStd: 127.5,
-        numResultsPerClass: 1,
-        threshold: 0.4,
-      );
-      
-      return recognitions ?? [];
+      // Convert CameraImage to InputImage format for ML Kit
+      final inputImage = _convertCameraImage(image);
+      final objects = await _objectDetector.processImage(inputImage);
+      return objects;
     } catch (e) {
       print('Detection error: $e');
       return [];
     }
   }
 
-  void _onArViewCreated(ArCoreController controller) {
-    _arCoreController = controller;
-    _add3DObject();
-  }
-
-  void _add3DObject() {
-    if (_detectedObject == null || _arCoreController == null) return;
-
-    // Create a 3D object based on detected object type
-    final node = ArCoreReferenceNode(
-      name: _detectedObject,
-      object3DFileName: _get3DModelForObject(_detectedObject!),
-      position: Vector3(0, 0, -1.5),
-      scale: Vector3(0.5, 0.5, 0.5),
-    );
-
-    _arCoreController!.addArCoreNode(node);
-  }
-
-  String _get3DModelForObject(String object) {
-    // Map objects to 3D models (you'll need to provide these models)
-    final modelMap = {
-      'chair': 'chair.sfb',
-      'table': 'table.sfb',
-      'car': 'car.sfb',
-      'cup': 'cup.sfb',
-      // Add more mappings as needed
-    };
-    
-    return modelMap[object.toLowerCase()] ?? 'cube.sfb';
-  }
-
-  void _startArView() {
-    if (_recognitions.isNotEmpty) {
-      final detection = _recognitions.first;
-      final detectedClass = labels[detection['detectedClass']];
-      
-      setState(() {
-        _isArViewActive = true;
-        _detectedObject = detectedClass;
-      });
+  InputImage _convertCameraImage(CameraImage image) {
+    // Simplified conversion - in real app, you'd need proper conversion
+    final WriteBuffer allBytes = WriteBuffer();
+    for (final Plane plane in image.planes) {
+      allBytes.putUint8List(plane.bytes);
     }
+    final bytes = allBytes.done().buffer.asUint8List();
+
+    return InputImage.fromBytes(
+      bytes: bytes,
+      inputImageData: InputImageData(
+        size: Size(image.width.toDouble(), image.height.toDouble()),
+        imageRotation: InputImageRotation.rotation0deg,
+        inputImageFormat: InputImageFormat.nv21,
+        planeData: image.planes.map((plane) {
+          return InputImagePlaneMetadata(
+            bytesPerRow: plane.bytesPerRow,
+            height: plane.height,
+            width: plane.width,
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  void _startArView(String objectLabel) {
+    setState(() {
+      _isArViewActive = true;
+      _selectedObject = objectLabel;
+    });
   }
 
   void _exitArView() {
     setState(() {
       _isArViewActive = false;
-      _detectedObject = null;
+      _selectedObject = null;
     });
   }
 
   @override
   void dispose() {
     _controller.dispose();
-    Tflite.close();
-    _arCoreController?.dispose();
+    _objectDetector.close();
+    _interpreter?.close();
     super.dispose();
   }
 
@@ -196,7 +188,7 @@ class _CameraPreviewScreenState extends State<CameraPreviewScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_isArViewActive ? 'AR View' : 'Object Detection'),
+        title: Text(_isArViewActive ? 'AR View - $_selectedObject' : 'Object Detection'),
         actions: _isArViewActive
             ? [
                 IconButton(
@@ -207,22 +199,46 @@ class _CameraPreviewScreenState extends State<CameraPreviewScreen> {
             : null,
       ),
       body: _isArViewActive ? _buildArView() : _buildCameraView(),
-      floatingActionButton: _isArViewActive
-          ? null
-          : FloatingActionButton(
-              onPressed: _startArView,
-              child: Icon(Icons.visibility),
-              tooltip: 'View in AR',
-            ),
     );
   }
 
   Widget _buildArView() {
-    return ArCoreView(
-      onArCoreViewCreated: _onArViewCreated,
-      enableTapRecognizer: true,
-      enableUpdateListener: true,
+    return ARView(
+      onARViewCreated: _onArViewCreated,
+      planeDetectionConfig: PlaneDetectionConfig.horizontalAndVertical,
     );
+  }
+
+  void _onArViewCreated(ARViewController controller) {
+    // Add AR objects when view is created
+    _addArObject(controller);
+  }
+
+  void _addArObject(ARViewController controller) {
+    if (_selectedObject == null) return;
+
+    // Create AR node based on detected object
+    final node = ARNode(
+      type: NodeType.webGLB,
+      uri: _get3DModelUrl(_selectedObject!),
+      position: Vector3(0, 0, -1.5),
+      scale: Vector3(0.3, 0.3, 0.3),
+    );
+
+    controller.addNode(node);
+  }
+
+  String _get3DModelUrl(String object) {
+    // Map objects to 3D model URLs (you can use local assets or web URLs)
+    final modelMap = {
+      'chair': 'https://modelviewer.dev/shared-assets/models/Chair.glb',
+      'table': 'https://modelviewer.dev/shared-assets/models/Table.glb',
+      'car': 'https://modelviewer.dev/shared-assets/models/Car.glb',
+      'cup': 'https://modelviewer.dev/shared-assets/models/Cup.glb',
+    };
+    
+    return modelMap[object.toLowerCase()] ?? 
+           'https://modelviewer.dev/shared-assets/models/Cube.glb';
   }
 
   Widget _buildCameraView() {
@@ -239,26 +255,78 @@ class _CameraPreviewScreenState extends State<CameraPreviewScreen> {
           },
         ),
         _buildDetectionOverlay(),
+        _buildObjectList(),
       ],
     );
   }
 
   Widget _buildDetectionOverlay() {
-    if (_recognitions.isEmpty) {
+    return CustomPaint(
+      painter: DetectionPainter(_detectedObjects),
+      size: Size.infinite,
+    );
+  }
+
+  Widget _buildObjectList() {
+    if (_detectedObjects.isEmpty) {
       return Container();
     }
 
-    return CustomPaint(
-      painter: DetectionPainter(_recognitions, labels),
+    return Positioned(
+      bottom: 20,
+      left: 20,
+      right: 20,
+      child: Container(
+        height: 100,
+        decoration: BoxDecoration(
+          color: Colors.black54,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: ListView.builder(
+          scrollDirection: Axis.horizontal,
+          itemCount: _detectedObjects.length,
+          itemBuilder: (context, index) {
+            final object = _detectedObjects[index];
+            final label = object.labels.isNotEmpty ? object.labels.first.text : 'Unknown';
+            final confidence = object.labels.isNotEmpty 
+                ? (object.labels.first.confidence * 100).toStringAsFixed(1) 
+                : '0.0';
+
+            return GestureDetector(
+              onTap: () => _startArView(label),
+              child: Container(
+                margin: EdgeInsets.all(8),
+                padding: EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      label,
+                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                    Text(
+                      '$confidence%',
+                      style: TextStyle(color: Colors.white70),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      ),
     );
   }
 }
 
 class DetectionPainter extends CustomPainter {
-  final List<dynamic> recognitions;
-  final List<String> labels;
+  final List<DetectedObject> detectedObjects;
 
-  DetectionPainter(this.recognitions, this.labels);
+  DetectionPainter(this.detectedObjects);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -271,15 +339,12 @@ class DetectionPainter extends CustomPainter {
       ..color = Colors.white
       ..style = PaintingStyle.fill;
 
-    for (var recognition in recognitions) {
-      final rect = recognition['rect'];
-      final detectedClass = recognition['detectedClass'];
-      final confidence = recognition['confidenceInClass'];
-
-      final left = rect['x'] * size.width;
-      final top = rect['y'] * size.height;
-      final right = (rect['x'] + rect['w']) * size.width;
-      final bottom = (rect['y'] + rect['h']) * size.height;
+    for (var object in detectedObjects) {
+      final boundingBox = object.boundingBox;
+      final left = boundingBox.left;
+      final top = boundingBox.top;
+      final right = boundingBox.right;
+      final bottom = boundingBox.bottom;
 
       // Draw bounding box
       canvas.drawRect(
@@ -287,23 +352,26 @@ class DetectionPainter extends CustomPainter {
         paint,
       );
 
-      // Draw label
-      final text = '${labels[detectedClass]} ${(confidence * 100).toStringAsFixed(1)}%';
-      final textSpan = TextSpan(
-        text: text,
-        style: TextStyle(backgroundColor: Colors.red, color: Colors.white),
-      );
-      final textPainter = TextPainter(
-        text: textSpan,
-        textDirection: TextDirection.ltr,
-      );
-      textPainter.layout();
-      textPainter.paint(canvas, Offset(left, top - 20));
+      // Draw label if available
+      if (object.labels.isNotEmpty) {
+        final label = object.labels.first;
+        final text = '${label.text} ${(label.confidence * 100).toStringAsFixed(1)}%';
+        final textSpan = TextSpan(
+          text: text,
+          style: TextStyle(backgroundColor: Colors.red, color: Colors.white, fontSize: 14),
+        );
+        final textPainter = TextPainter(
+          text: textSpan,
+          textDirection: TextDirection.ltr,
+        );
+        textPainter.layout();
+        textPainter.paint(canvas, Offset(left, top - 20));
+      }
     }
   }
 
   @override
   bool shouldRepaint(DetectionPainter oldDelegate) {
-    return oldDelegate.recognitions != recognitions;
+    return oldDelegate.detectedObjects != detectedObjects;
   }
 }
